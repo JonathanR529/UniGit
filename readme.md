@@ -64,13 +64,11 @@ On first run, the script will create a `config.json` file with default settings:
 
 ## Building
 
-You can build UniGit into an executable using PyInstaller:
+You can build UniGit into an executable using Nuitka:
 
 ```
-pyinstaller --onefile UniGit.py
+nuitka --onefile --quiet --no-progress UniGit.py
 ```
-
-If you have [UPX](https://upx.github.io/) you can optionally use the `--upx-dir` flag with PyInstaller to compress the compiled executable and reduce its file size.
 
 ## Error Logging
 
