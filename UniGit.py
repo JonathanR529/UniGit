@@ -347,7 +347,16 @@ class UniGit:
                         cmd.append("--recurse-submodules")
                     cmd.append(repo_url)
                     cmd.append(str(repo_path))
-                    subprocess.run(cmd, check=True)
+                    
+                    try:
+                        subprocess.run(cmd, check=True)
+                    except subprocess.CalledProcessError as e:
+                        error_output = str(e)
+                        if "403" in error_output or "forbidden" in error_output.lower() or "Permission denied" in error_output:
+                            print(f"Repository {repo_name} is forbidden. Skipping...")
+                        else:
+                            print(f"Error cloning repository {repo_name}: {error_output}")
+                        continue
                 
                 print(f"All repositories for user {username} have been cloned.")
                 
@@ -404,8 +413,15 @@ class UniGit:
                 if pull_submodules:
                     cmd.append("--recurse-submodules")
                     
-                subprocess.run(cmd, cwd=repo_name, check=True)
-                print(f"Repository '{repo_name}' updated successfully.")
+                try:
+                    subprocess.run(cmd, cwd=repo_name, check=True)
+                    print(f"Repository '{repo_name}' updated successfully.")
+                except subprocess.CalledProcessError as e:
+                    error_output = str(e)
+                    if "403" in error_output or "forbidden" in error_output.lower() or "Permission denied" in error_output:
+                        print(f"Repository {repo_name} is forbidden. Skipping...")
+                    else:
+                        print(f"Error updating repository {repo_name}: {error_output}")
                 
             elif pull_option == "2":
                 pull_submodules = input("Pull submodules? (y/n) [n]: ").strip().lower() == 'y'
@@ -662,11 +678,22 @@ class UniGit:
             self.logger.debug(f"Pulling updates in {directory}")
             print(f"Pulling {directory}...")
             
-            cmd = ["git", "pull"]
-            if pull_submodules:
-                cmd.append("--recurse-submodules")
-                
-            subprocess.check_call(cmd, cwd=directory)
+            # Use try-except to catch permission errors and continue
+            try:
+                cmd = ["git", "pull"]
+                if pull_submodules:
+                    cmd.append("--recurse-submodules")
+                    
+                subprocess.check_call(cmd, cwd=directory)
+            except subprocess.CalledProcessError as e:
+                error_output = str(e)
+                if "403" in error_output or "forbidden" in error_output.lower() or "Permission denied" in error_output:
+                    self.logger.warning(f"Repository {directory} is forbidden. Skipping...")
+                    print(f"Repository {directory} is forbidden. Skipping...")
+                else:
+                    self.logger.error(f"Git error in {directory}: {error_output}")
+                    print(f"Git error in {directory}: {error_output}")
+                return
 
             new_head = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=directory, encoding='utf-8'
@@ -732,7 +759,13 @@ class UniGit:
                     # Check if this is a git repository
                     if (item_path / ".git").is_dir():
                         self.logger.debug(f"Found git repository: {item_path}")
-                        self.git_pull(item_path, pull_submodules)
+                        try:
+                            self.git_pull(item_path, pull_submodules)
+                        except Exception as e:
+                            self.logger.error(f"Error pulling {item_path}: {str(e)}")
+                            print(f"Error pulling {item_path}: {str(e)}")
+                            # Continue with the next repository
+                            continue
                     else:
                         # Recursively search subdirectories
                         self.git_pull_recursive(item_path, pull_submodules)
