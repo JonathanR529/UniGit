@@ -16,7 +16,8 @@ DEFAULT_CONFIG = {
     "log_level": "INFO",
     "model": "llama3.2",
     "max_retries": 2,
-    "summary_timeout": 30
+    "summary_timeout": 30,
+    "use_user_directories": False  # New option for username directories
 }
 
 
@@ -35,6 +36,7 @@ class UniGit:
         self.model = config.get("model", DEFAULT_CONFIG["model"])
         self.max_retries = config.get("max_retries", DEFAULT_CONFIG["max_retries"])
         self.summary_timeout = config.get("summary_timeout", DEFAULT_CONFIG["summary_timeout"])
+        self.use_user_directories = config.get("use_user_directories", DEFAULT_CONFIG["use_user_directories"])  # Added
         self.logger = logging.getLogger("UniGit")
         self.summaries = []
         self.current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -368,21 +370,34 @@ class UniGit:
                 repo_name = self.extract_repo_name(repo_url)
                 target_dir = Path(repo_name)
                 
+                # If use_user_directories is enabled, create username directory
+                if self.use_user_directories:
+                    # Extract username or organization from URL
+                    match = re.search(r'[:/]([^/]+)/[^/]+$', repo_url)
+                    if match:
+                        username = match.group(1)
+                        # Create user directory if it doesn't exist
+                        user_dir = Path(username)
+                        if not user_dir.exists():
+                            user_dir.mkdir()
+                        target_dir = user_dir / repo_name
+                
                 if target_dir.exists():
-                    overwrite = input(f"Directory '{repo_name}' already exists. Overwrite? (y/n) [n]: ").strip().lower()
+                    overwrite = input(f"Directory '{target_dir}' already exists. Overwrite? (y/n) [n]: ").strip().lower()
                     if overwrite != 'y':
                         print("Clone operation cancelled.")
                         return
                 
-                print(f"Cloning repository '{repo_url}' to '{repo_name}'...")
+                print(f"Cloning repository '{repo_url}' to '{target_dir}'...")
                 
                 cmd = ["git", "clone"]
                 if clone_submodules:
                     cmd.append("--recurse-submodules")
                 cmd.append(repo_url)
+                cmd.append(str(target_dir))
                 
                 subprocess.run(cmd, check=True)
-                print(f"Repository cloned successfully to '{repo_name}'.")
+                print(f"Repository cloned successfully to '{target_dir}'.")
             
         except subprocess.CalledProcessError as e:
             print(f"Error cloning repository: {str(e)}")
@@ -890,6 +905,11 @@ def load_or_create_config(config_file: Union[str, Path]) -> Dict[str, any]:
         model_input = input(
             f"Ollama model to use [{DEFAULT_CONFIG['model']}]: "
         ).strip()
+        
+        # Ask about user directories feature
+        use_user_dirs_input = input(
+            f"When cloning a single repository, create a directory named after the username? (true/false/t/f) [{DEFAULT_CONFIG['use_user_directories']}]: "
+        ).strip().lower()
 
         # Parse user input
         if enable_summary_input in ("true", "t", "false", "f"):
@@ -900,6 +920,9 @@ def load_or_create_config(config_file: Union[str, Path]) -> Dict[str, any]:
             
         if model_input:
             config["model"] = model_input
+            
+        if use_user_dirs_input in ("true", "t", "false", "f"):
+            config["use_user_directories"] = use_user_dirs_input in ("true", "t")
 
         # Save configuration
         try:
