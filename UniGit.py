@@ -423,36 +423,26 @@ class UniGit:
                     
                 pull_submodules = input("Pull submodules? (y/n) [n]: ").strip().lower() == 'y'
                 
-                print(f"Pulling updates for '{repo_name}'...")
-                cmd = ["git", "pull"]
-                if pull_submodules:
-                    cmd.append("--recurse-submodules")
-                    
-                try:
-                    subprocess.run(cmd, cwd=repo_name, check=True)
-                    print(f"Repository '{repo_name}' updated successfully.")
-                except subprocess.CalledProcessError as e:
-                    error_output = str(e)
-                    if "403" in error_output or "forbidden" in error_output.lower() or "Permission denied" in error_output:
-                        print(f"Repository {repo_name} is forbidden. Skipping...")
-                    else:
-                        print(f"Error updating repository {repo_name}: {error_output}")
-                
+                print(f"Checking for updates in '{repo_name}'...")
+                was_updated = self.git_pull(repo_name, pull_submodules)
+                if not was_updated:
+                    print(f"Repository '{repo_name}' is already up to date.")
+            
             elif pull_option == "2":
                 pull_submodules = input("Pull submodules? (y/n) [n]: ").strip().lower() == 'y'
-                print("Pulling updates for all repositories in current directory...")
+                print("Checking all repositories in current directory...")
                 
                 # Reset summaries list before starting
                 self.summaries = []
                 
-                self.git_pull_recursive(Path.cwd(), pull_submodules)
+                total_repos, updated_repos = self.git_pull_recursive(Path.cwd(), pull_submodules)
                 
                 if self.summaries and self.enable_summary:
                     summary_file = Path("git_summaries.txt")
                     self.save_summaries(summary_file)
                     print(f"Summaries saved to {summary_file}")
                 
-                print("All repositories updated successfully.")
+                print(f"\nSummary: Checked {total_repos} repositories, {updated_repos} updated.")
                 
             else:
                 print("Invalid option selected.")
@@ -657,13 +647,16 @@ class UniGit:
                 self.summary_failures += 1
                 return "Error generating summary due to an unexpected issue."
 
-    def git_pull(self, directory: Union[str, Path], pull_submodules: bool = False) -> None:
+    def git_pull(self, directory: Union[str, Path], pull_submodules: bool = False) -> bool:
         """
         Pull updates for a Git repository.
 
         Args:
             directory: Path to the Git repository
             pull_submodules: Whether to pull submodules as well
+            
+        Returns:
+            True if changes were pulled, False if repository was already up to date or failed
         """
         directory = Path(directory)
         try:
@@ -687,11 +680,11 @@ class UniGit:
                 if new_commits:
                     self.logger.info(f"[Dry Run] Would pull in {directory} (branch: {branch})")
                     self.logger.info(f"[Dry Run] New commits for {directory}:\n{new_commits}")
-                return
+                    return True
+                return False
 
             # Perform actual git pull
             self.logger.debug(f"Pulling updates in {directory}")
-            print(f"Pulling {directory}...")
             
             # Use try-except to catch permission errors and continue
             try:
@@ -708,17 +701,19 @@ class UniGit:
                 else:
                     self.logger.error(f"Git error in {directory}: {error_output}")
                     print(f"Git error in {directory}: {error_output}")
-                return
+                return False
 
             new_head = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=directory, encoding='utf-8'
             ).strip()
 
-            # Skip if no new commits
+            # Skip if no new commits - don't print anything to console
             if old_head == new_head:
                 self.logger.debug(f"No changes in {directory}")
-                print(f"No changes in {directory}")
-                return
+                return False
+
+            # Log the successful update
+            print(f"Updated {directory}")
 
             # Get and potentially summarize new commits
             new_commits = subprocess.check_output(
@@ -732,7 +727,7 @@ class UniGit:
                     if self.enable_summary:
                         self.logger.warning("Multiple summary failures detected. Disabling summaries for this run.")
                         self.enable_summary = False
-                    return
+                    return True
                 
                 self.logger.info(f"New commits in {directory} ({branch}):\n{new_commits}")
                 print(f"Generating summary for {directory}...")
@@ -743,24 +738,34 @@ class UniGit:
                     "summary": summary,
                     "success": not summary.startswith("Error")
                 })
+                
+            return True
 
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Git error in {directory}: {str(e)}")
             print(f"Git error in {directory}: {str(e)}")
+            return False
         except Exception as e:
             self.logger.error(f"Unexpected error in {directory}: {str(e)}")
             print(f"Unexpected error in {directory}: {str(e)}")
+            return False
 
-    def git_pull_recursive(self, directory: Union[str, Path], pull_submodules: bool = False) -> None:
+    def git_pull_recursive(self, directory: Union[str, Path], pull_submodules: bool = False) -> Tuple[int, int]:
         """
         Recursively search for Git repositories and pull updates.
 
         Args:
             directory: Root directory to start the search
             pull_submodules: Whether to pull submodules as well
+            
+        Returns:
+            Tuple of (total repositories found, repositories updated)
         """
         directory = Path(directory)
         self.logger.debug(f"Scanning directory: {directory}")
+        
+        total_repos = 0
+        updated_repos = 0
         
         try:
             for item in os.listdir(directory):
@@ -774,8 +779,11 @@ class UniGit:
                     # Check if this is a git repository
                     if (item_path / ".git").is_dir():
                         self.logger.debug(f"Found git repository: {item_path}")
+                        total_repos += 1
                         try:
-                            self.git_pull(item_path, pull_submodules)
+                            was_updated = self.git_pull(item_path, pull_submodules)
+                            if was_updated:
+                                updated_repos += 1
                         except Exception as e:
                             self.logger.error(f"Error pulling {item_path}: {str(e)}")
                             print(f"Error pulling {item_path}: {str(e)}")
@@ -783,13 +791,17 @@ class UniGit:
                             continue
                     else:
                         # Recursively search subdirectories
-                        self.git_pull_recursive(item_path, pull_submodules)
+                        sub_total, sub_updated = self.git_pull_recursive(item_path, pull_submodules)
+                        total_repos += sub_total
+                        updated_repos += sub_updated
         except PermissionError as e:
             self.logger.warning(f"Permission denied: {directory} - {str(e)}")
             print(f"Permission denied: {directory} - {str(e)}")
         except Exception as e:
             self.logger.error(f"Error scanning {directory}: {str(e)}")
             print(f"Error scanning {directory}: {str(e)}")
+            
+        return total_repos, updated_repos
 
     def save_summaries(self, summary_file_path: Union[str, Path]) -> None:
         """
